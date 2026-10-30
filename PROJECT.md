@@ -69,3 +69,30 @@ It is personally useful while demonstrating local file handling, Markdown parsin
 ## Next decision
 
 Before implementation, choose whether the first prototype should be a browser-based local app or a Tauri desktop app. Start browser-based unless filesystem access proves limiting.
+
+## Current implementation status
+
+### Completed — browser MVP
+
+The first read-only browser prototype is implemented with React, TypeScript, Vite and Cytoscape.js. It can:
+
+- prompt the user to choose a local notes folder;
+- recursively discover Markdown files without uploading or modifying them;
+- parse wiki links, Markdown links to other `.md` files and tags;
+- display notes and links as an interactive graph;
+- show missing-link nodes, note previews, paths, backlinks and outgoing-link counts; and
+- search notes and tags.
+
+### Development note
+
+This project lives on a FAT32 USB drive. Source files and Git work normally there, but Node.js package installations do not: FAT32 cannot reliably store the symbolic links used in `node_modules/.bin`.
+
+Keep the USB folder as the portable source and backup. For development, clone the repository to a native Linux filesystem, install dependencies there, run `npm run dev`, then commit and push changes. The USB copy can then pull the changes when needed.
+
+### Next implementation tasks
+
+1. Test the current app against a real, non-sensitive Markdown folder.
+2. Improve wiki-link resolution for duplicate note names, aliases and heading links.
+3. Add graph filters: folder, tag, unresolved links and selected-note neighbourhood.
+4. Add a safer, clearer empty-state and error experience for unsupported browsers.
+5. Decide whether a Tauri desktop build is worthwhile after the browser prototype is proven useful.
