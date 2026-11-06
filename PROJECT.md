@@ -1,98 +1,46 @@
-# Personal Obsidian Graph Viewer
+# Pexx Brain graph system
 
 ## Purpose
 
-Build a local-first visual graph viewer for an existing collection of Markdown notes. Markdown files and the folder structure remain the source of truth; the application only indexes links and displays their relationships.
+This repository contains the local 3D graph shown in the Brain tab of Pexx Industries. It replaces the original browser-only 2D Cytoscape prototype. The graph is a read-only view of the user's local Markdown memory folder.
 
-The inspiration is Obsidian's graph view, not a replacement for Obsidian. The project should make it easier to explore connections between notes while preserving the simplicity and portability of an organised file system.
+## Current release
 
-## Product principles
+**Brain 0.1.6 — 5 November 2026**
 
-- Read-only for the first release: never rename, move, modify or delete the user's notes.
-- Local-first: notes stay on the user's computer.
-- File-system based: no proprietary database is required for the notes themselves.
-- Keep the graph useful: focus on navigation and relationships rather than an impressive but unreadable all-notes cloud.
-- AI may later suggest relationships, but Markdown links remain the source of truth.
+- Every Markdown note remains visible, including notes with no references.
+- Larger graph nodes group notes by folder and YAML metadata.
+- Directed references distinguish wiki links, Markdown links, YAML `source` fields, and file mentions. Folder and metadata edges remain visually subdued.
+- `_manifest.csv` preserves original paths for uniquely renamed notes.
+- A unique current path, original path, filename, or directory-plus-filename suffix can resolve a reference. Ambiguous references stay unlinked.
+- Cited Markdown paths outside the indexed folder appear in a `mentioned` area. They are represented as mentioned paths, not read as external note content.
+- Search, domain filtering, group visibility, fit, freeze/resume, refresh, full-screen, hover detail, note inspection, and connection highlighting are available.
+- Slow idle rotation resumes five seconds after interaction, pauses while the app is hidden, and is disabled for reduced motion.
 
-## Minimum viable product
+## Local data boundary
 
-1. Let the user select a local notes folder.
-2. Recursively discover Markdown (`.md`) files.
-3. Extract and resolve:
-   - Obsidian-style wiki links such as `[[Project Brief]]`
-   - normal Markdown links to `.md` files such as `[Read notes](projects/project-brief.md)`
-   - tags such as `#project`
-   - optional YAML frontmatter.
-4. Represent every note as a node and every resolved link as an edge.
-5. Show a graph with pan, zoom, search and node selection.
-6. When a node is selected, show a note preview, its file path, outgoing links, backlinks and tags.
-7. Allow filtering by folder, tag and the selected note's local neighbourhood.
-8. Create visible missing-note nodes for unresolved links.
+Electron reads `~/Desktop/AI` from disk and exposes graph data through a single validated IPC call, `window.pexx.getBrain()`. The renderer has no Node.js access. The reader skips hidden folders and symbolic links, limits files to 4 MB each, total input to 32 MB, and the index to 5,000 Markdown files. Note previews are plain text and capped at 6,000 characters. Graph construction and parsing run locally. The application never changes or uploads notes.
 
-## Link-resolution scope
+## Source map
 
-Version one supports file-level links only. It should detect broken links, but can defer aliases, embeds, block references and links to headings such as `[[Project Brief#Next steps]]` until the core experience is reliable.
+- `src/brain/Brain.tsx` — 3D graph, layout, controls, selection, and inspection.
+- `src/brain/brain.css` — graph controls, inspector, empty/error states, and responsive styles.
+- `src/brain/types.ts` — graph node, link, and reader result types.
+- `src/brain/version.ts` — graph-specific release history.
+- `electron/brain.cjs` — Markdown collection, YAML/manifest parsing, relationship resolution, graph construction, and input limits.
+- `electron/main.cjs` and `electron/preload.cjs` — Electron window and the restricted reader bridge.
 
-## Recommended initial stack
+The Pexx Industries parent project embeds the same `src/brain/` component and reader. Changes to graph behavior should be reflected in both projects and appended to `src/brain/version.ts`.
 
-- React, TypeScript and Vite for the interface.
-- Cytoscape.js for graph rendering, layouts and interaction.
-- `gray-matter` for YAML frontmatter.
-- `remark` or a lightweight Markdown parser for standard Markdown links and headings.
-- Begin as a local browser application using folder selection. Package it with Tauri later if a desktop application needs more reliable filesystem access.
+## Run
 
-## Personal project-memory view
+```bash
+npm install
+npm run desktop
+```
 
-A useful later view could:
+To package a Linux AppImage, run `npm run package:linux`. The desktop app reads the current user's `~/Desktop/AI` folder. The Vite renderer alone cannot access the folder; use the Electron desktop command.
 
-- show only a selected project's local subgraph;
-- highlight disconnected notes, missing links and heavily connected hub notes;
-- surface recently changed notes; and
-- suggest potential links without changing files automatically.
+## Previous prototype
 
-## Explicitly deferred
-
-Do not build these in the first version:
-
-- Markdown note editing;
-- cloud sync or collaboration;
-- mobile support;
-- plugin architecture;
-- embedding/vector search;
-- AI chat, automatic summaries or automatic file edits;
-- advanced alias, block-reference and heading-link support.
-
-## Why this is a good project
-
-It is personally useful while demonstrating local file handling, Markdown parsing, graph data structures, visual interaction design and disciplined product scope. A focused MVP should be realistic in two to three weekends.
-
-## Next decision
-
-Before implementation, choose whether the first prototype should be a browser-based local app or a Tauri desktop app. Start browser-based unless filesystem access proves limiting.
-
-## Current implementation status
-
-### Completed — browser MVP
-
-The first read-only browser prototype is implemented with React, TypeScript, Vite and Cytoscape.js. It can:
-
-- prompt the user to choose a local notes folder;
-- recursively discover Markdown files without uploading or modifying them;
-- parse wiki links, Markdown links to other `.md` files and tags;
-- display notes and links as an interactive graph;
-- show missing-link nodes, note previews, paths, backlinks and outgoing-link counts; and
-- search notes and tags.
-
-### Development note
-
-This project lives on a FAT32 USB drive. Source files and Git work normally there, but Node.js package installations do not: FAT32 cannot reliably store the symbolic links used in `node_modules/.bin`.
-
-Keep the USB folder as the portable source and backup. For development, clone the repository to a native Linux filesystem, install dependencies there, run `npm run dev`, then commit and push changes. The USB copy can then pull the changes when needed.
-
-### Next implementation tasks
-
-1. Test the current app against a real, non-sensitive Markdown folder.
-2. Improve wiki-link resolution for duplicate note names, aliases and heading links.
-3. Add graph filters: folder, tag, unresolved links and selected-note neighbourhood.
-4. Add a safer, clearer empty-state and error experience for unsupported browsers.
-5. Decide whether a Tauri desktop build is worthwhile after the browser prototype is proven useful.
+The former 2D browser prototype, its Cytoscape resolver, and its unfinished feature roadmap were removed from the current working tree. Their Git history remains available in earlier commits.
