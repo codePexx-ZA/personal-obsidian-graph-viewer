@@ -8,7 +8,7 @@ import type { BrainData, BrainLink, BrainNode } from './types'
 import { BRAIN_RELEASES } from './version'
 import './brain.css'
 
-type PositionedNode = BrainNode & { x?: number; y?: number; z?: number }
+type PositionedNode = BrainNode & { x?: number; y?: number; z?: number; vx?: number; vy?: number; vz?: number }
 type RenderLink = Omit<BrainLink, 'source' | 'target'> & { source: string | PositionedNode; target: string | PositionedNode }
 type Graph = ForceGraph3DInstance<PositionedNode, RenderLink>
 const palette: Record<string, string> = { global: '#d8e4f6', business: '#f4b881', homelab: '#62d8be', learning: '#f1d57a', 'software-projects': '#8baeff', university: '#bb9df7', personal: '#f1a3c4', finance: '#9cd68f', tools: '#70d6e9', 'Grok Bot History': '#b6a6dc', setup: '#a2b1c7', mentioned: '#e7a090' }
@@ -17,7 +17,7 @@ const relationName: Record<string, string> = { structure: 'Folder / metadata gro
 const endId = (value: string | PositionedNode) => typeof value === 'string' ? value : value.id
 const duration = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 650
 
-function makeNodeTooltip(node: PositionedNode, graphLinks: BrainLink[]) {
+function makeNodeTooltip(node: PositionedNode, count: number) {
   const card = document.createElement('div')
   card.className = 'brain-tooltip brain-note-tooltip'
   card.setAttribute('role', 'tooltip')
@@ -34,14 +34,11 @@ function makeNodeTooltip(node: PositionedNode, graphLinks: BrainLink[]) {
       tags.textContent = node.tags.map(tag => `#${tag}`).join('  ')
       card.append(tags)
     }
-    const referenceCount = graphLinks.filter(link => link.kind !== 'structure' && (link.source === node.id || link.target === node.id)).length
-    const count = document.createElement('small')
-    count.textContent = `${node.domain} · ${referenceCount} references`
-    card.append(count)
+    const references = document.createElement('small')
+    references.textContent = `${node.domain} · ${count} references`
+    card.append(references)
   } else {
-    const members = node.kind === 'root' ? graphLinks.filter(link => link.kind === 'structure' && link.source === node.id).length
-      : graphLinks.filter(link => link.kind === 'structure' && link.source === node.id).length
-    detail.textContent = node.kind === 'root' ? `${members} memory areas` : `${members} grouped notes or projects`
+    detail.textContent = node.kind === 'root' ? `${count} memory areas` : `${count} grouped notes or projects`
     card.append(detail)
   }
   return card
@@ -52,6 +49,8 @@ function MemoryGraph({ nodes, links, selected, hovered, onSelect, onHover, graph
   graphRef: React.MutableRefObject<Graph | null>; frozen: boolean; onError: (message: string) => void
 }) {
   const host = useRef<HTMLDivElement>(null)
+  const looseNodes = useRef<PositionedNode[]>([])
+  const tooltipCounts = useRef(new Map<string, number>())
   const fitAfterLayout = useRef(false)
   const selectRef = useRef(onSelect)
   useEffect(() => { selectRef.current = onSelect }, [onSelect])
@@ -93,7 +92,7 @@ function MemoryGraph({ nodes, links, selected, hovered, onSelect, onHover, graph
       window.addEventListener('pointercancel', trackInteraction)
       graph.backgroundColor('#0a101b').showNavInfo(false).nodeResolution(12).nodeOpacity(0.95)
         .nodeColor(node => color(node)).nodeVal(node => node.kind === 'root' ? 36 : node.kind === 'domain' ? 18 : node.kind === 'project' ? 7 : 2.4)
-        .nodeLabel(node => makeNodeTooltip(node, links))
+        .nodeLabel(node => makeNodeTooltip(node, tooltipCounts.current.get(node.id) ?? 0))
         .linkLabel(link => { const el = document.createElement('div'); el.className = 'brain-tooltip'; el.textContent = `${relationName[link.kind]}${link.evidence ? ': ' + link.evidence : ''}`; return el })
         .nodeThreeObjectExtend(true).nodeThreeObject((node: PositionedNode) => {
           if (node.kind === 'note') return new Group()
@@ -110,16 +109,8 @@ function MemoryGraph({ nodes, links, selected, hovered, onSelect, onHover, graph
       graph.d3Force('charge')?.strength(-55)
       graph.d3Force('link')?.distance((link: RenderLink) => link.kind === 'structure' ? 40 : 75)
       graph.d3Force('hold', (alpha: number) => {
-        const data = graph.graphData()
-        const degree = new Map(data.nodes.map(node => [node.id, 0]))
-        for (const link of data.links) {
-          const source = endId(link.source), target = endId(link.target)
-          degree.set(source, (degree.get(source) || 0) + 1)
-          degree.set(target, (degree.get(target) || 0) + 1)
-        }
-        const loose = data.nodes.filter(node => !degree.get(node.id))
-        loose.forEach((node, index) => {
-          const point = node as PositionedNode & { vx?: number; vy?: number; vz?: number }
+        const loose = looseNodes.current
+        loose.forEach((point, index) => {
           const angle = index / Math.max(loose.length, 1) * Math.PI * 2
           const pull = 0.55 * alpha
           point.vx = (point.vx || 0) + (Math.cos(angle) * 240 - (point.x || 0)) * pull
@@ -159,7 +150,11 @@ function MemoryGraph({ nodes, links, selected, hovered, onSelect, onHover, graph
     const domains = [...new Set(nodes.map(n => n.domain))].sort()
     const existing = new Map(graph.graphData().nodes.map(n => [n.id, n]))
     const degree = new Map<string, number>()
+    const counts = new Map<string, number>()
+    const addCount = (id: string) => counts.set(id, (counts.get(id) ?? 0) + 1)
     for (const link of links) {
+      addCount(link.source)
+      if (link.kind !== 'structure' && link.target !== link.source) addCount(link.target)
       degree.set(link.source, (degree.get(link.source) || 0) + 1)
       degree.set(link.target, (degree.get(link.target) || 0) + 1)
     }
@@ -175,6 +170,8 @@ function MemoryGraph({ nodes, links, selected, hovered, onSelect, onHover, graph
       const radius = node.kind === 'root' ? 0 : node.kind === 'domain' ? 100 : 160
       return { ...node, x: old?.x ?? Math.cos(angle) * radius + Math.sin(i * 17) * 30, y: old?.y ?? Math.sin(angle) * radius + Math.cos(i * 11) * 30, z: old?.z ?? Math.sin(i * 7) * 80 }
     })
+    looseNodes.current = initial.filter(node => !degree.get(node.id))
+    tooltipCounts.current = counts
     fitAfterLayout.current = true
     graph.cooldownTicks(frozenRef.current ? 0 : 80).graphData({ nodes: initial, links: links.map(link => ({ ...link })) })
     return () => { fitAfterLayout.current = false }
@@ -236,7 +233,7 @@ export default function Brain() {
     try {
       if (document.fullscreenElement === stage) await document.exitFullscreen()
       else await stage.requestFullscreen()
-    } catch { /* Fullscreen can be unavailable in embedded or restricted contexts. */ }
+    } catch {}
   }
   const domains = useMemo(() => [...new Set(data?.nodes.filter(n => n.kind === 'note').map(n => n.domain))].sort(), [data])
   const visible = useMemo(() => {
@@ -245,7 +242,8 @@ export default function Brain() {
     return { nodes, links: (data?.links || []).filter(l => (structure || l.kind !== 'structure') && ids.has(l.source) && ids.has(l.target)) }
   }, [data, domain, structure])
   const matches = useMemo(() => visible.nodes.filter(n => n.kind === 'note' && `${n.label} ${n.path} ${n.tags?.join(' ')}`.toLowerCase().includes(query.trim().toLowerCase())), [visible.nodes, query])
-  const current = data?.nodes.find(n => n.id === selected)
+  const nodesById = useMemo(() => new Map(data?.nodes.map(node => [node.id, node])), [data])
+  const current = selected ? nodesById.get(selected) : undefined
   const connections = data?.links.filter(l => l.kind !== 'structure' && (l.source === selected || l.target === selected)) || []
   const outgoing = connections.filter(l => l.source === selected)
   const incoming = connections.filter(l => l.target === selected)
@@ -267,7 +265,7 @@ export default function Brain() {
       </div>
       {(error || renderError || !data || data.stats.notes === 0) && <div className="brain-empty" role="status"><span>◌</span><h2>{loading ? 'Connecting your memory…' : error || renderError ? 'Brain is waiting' : 'No Markdown notes yet'}</h2><p>{error || renderError || (loading ? 'Reading Desktop/AI on this computer.' : 'Add .md files to Desktop/AI, then refresh.')}</p>{!loading && <button onClick={() => void load()}>Reload graph</button>}</div>}
       {data && !error && <div className="brain-legend"><p>MEMORY AREAS</p>{domains.map(d => <button key={d} className={domain !== 'all' && domain !== d ? 'muted' : ''} onClick={() => { setDomain(domain === d ? 'all' : d); setSelected(null); setQuery('') }}><i style={{ background: palette[d] || '#aabbd0' }} />{d.replaceAll('-', ' ')}</button>)}<div className="brain-lines"><span><i className="reference-line" /> Written reference</span>{structure && <span><i className="structure-line" /> Folder / metadata group</span>}</div></div>}
-      {current && <aside className="brain-inspector" aria-label="Selected memory"><button className="brain-dismiss" onClick={() => setSelected(null)} aria-label="Close note details"><X size={16} /></button><div className="brain-eyebrow" style={{ color: color(current) }}>{current.kind === 'note' ? current.domain : `${current.kind} GROUP`}</div><h2>{current.label}</h2>{current.kind === 'note' ? <><p className="brain-path">{current.path}</p><div className="brain-note-meta">{current.noteType && <span>{current.noteType}</span>}{current.status && <span>{current.status}</span>}{current.updated && <span>Updated {current.updated}</span>}</div>{current.summary && <p className="brain-note-summary">{current.summary}</p>}<div className="brain-connection-counts"><span>{incoming.length} incoming</span><span>{outgoing.length} outgoing</span></div>{current.tags?.length ? <p className="brain-tags">{current.tags.map(t => `#${t}`).join(' ')}</p> : null}<details><summary>Connections & evidence ({connections.length})</summary><div className="brain-connections">{connections.map((link, i) => { const other = data?.nodes.find(n => n.id === (link.source === selected ? link.target : link.source)); return <button key={i} onClick={() => other && onSelect(other.id)}><strong>{link.source === selected ? '→' : '←'} {other?.label}</strong><small>{relationName[link.kind]}{link.provenance === 'manifest' ? ' · original path in manifest' : link.provenance === 'mentioned' ? ' · not in the AI folder' : ''}</small><code>{link.evidence}</code></button> })}</div></details>{unresolved.length > 0 && <details><summary>{unresolved.length} unresolved references</summary>{unresolved.map((r, i) => <p className="brain-unresolved" key={i}><code>{r.raw}</code><small>{r.reason}</small></p>)}</details>}<details><summary>Markdown preview</summary><pre className="brain-preview">{current.preview}{current.previewTruncated ? '\n\n… Preview limited to 6,000 characters.' : ''}</pre></details></> : <><p className="brain-note-summary">A group from your folder structure and note metadata.</p><div className="brain-connections">{data?.nodes.filter(n => n.kind === 'note' && (current.kind === 'root' || n.domain === current.domain && (current.kind === 'domain' || n.project === current.project))).map(n => <button key={n.id} onClick={() => onSelect(n.id)}>{n.label}</button>)}</div></>}</aside>}
+      {current && <aside className="brain-inspector" aria-label="Selected memory"><button className="brain-dismiss" onClick={() => setSelected(null)} aria-label="Close note details"><X size={16} /></button><div className="brain-eyebrow" style={{ color: color(current) }}>{current.kind === 'note' ? current.domain : `${current.kind} GROUP`}</div><h2>{current.label}</h2>{current.kind === 'note' ? <><p className="brain-path">{current.path}</p><div className="brain-note-meta">{current.noteType && <span>{current.noteType}</span>}{current.status && <span>{current.status}</span>}{current.updated && <span>Updated {current.updated}</span>}</div>{current.summary && <p className="brain-note-summary">{current.summary}</p>}<div className="brain-connection-counts"><span>{incoming.length} incoming</span><span>{outgoing.length} outgoing</span></div>{current.tags?.length ? <p className="brain-tags">{current.tags.map(t => `#${t}`).join(' ')}</p> : null}<details><summary>Connections & evidence ({connections.length})</summary><div className="brain-connections">{connections.map((link, i) => { const other = nodesById.get(link.source === selected ? link.target : link.source); return <button key={i} onClick={() => other && onSelect(other.id)}><strong>{link.source === selected ? '→' : '←'} {other?.label}</strong><small>{relationName[link.kind]}{link.provenance === 'manifest' ? ' · original path in manifest' : link.provenance === 'mentioned' ? ' · not in the AI folder' : ''}</small><code>{link.evidence}</code></button> })}</div></details>{unresolved.length > 0 && <details><summary>{unresolved.length} unresolved references</summary>{unresolved.map((r, i) => <p className="brain-unresolved" key={i}><code>{r.raw}</code><small>{r.reason}</small></p>)}</details>}<details><summary>Markdown preview</summary><pre className="brain-preview">{current.preview}{current.previewTruncated ? '\n\n… Preview limited to 6,000 characters.' : ''}</pre></details></> : <><p className="brain-note-summary">A group from your folder structure and note metadata.</p><div className="brain-connections">{data?.nodes.filter(n => n.kind === 'note' && (current.kind === 'root' || n.domain === current.domain && (current.kind === 'domain' || n.project === current.project))).map(n => <button key={n.id} onClick={() => onSelect(n.id)}>{n.label}</button>)}</div></>}</aside>}
       {inspect && data && <aside className="brain-inspector" aria-label="Graph information"><button className="brain-dismiss" onClick={() => setInspect(false)} aria-label="Close graph information"><X size={16} /></button><div className="brain-eyebrow">GRAPH INFORMATION</div><h2>Built from your files.</h2><p className="brain-note-summary">Every small node is a Markdown file, including files with no connections. Larger nodes group notes by area and project. Connections use wiki links, Markdown links, YAML source fields, and backticked file paths. Original paths resolve through the manifest when available.</p><p className="brain-note-summary">File mentions can include examples or historical references. A file that is not in the AI folder is still drawn, in the mentioned area. Ambiguous names are left unlinked because more than one note uses that name, and those notes are already on the graph.</p><p className="brain-path">{data.rootPath}</p><div className="brain-note-meta"><span>{data.stats.explicitLinks} resolved Markdown / wiki links</span><span>{data.stats.withoutReferences} notes without references</span><span>{data.unresolved.length ? `${data.unresolved.length} unresolved references` : 'All Markdown files are on the graph'}</span></div><p className="brain-note-summary">Read-only · local processing · refresh to load file changes. Previews display plain text.</p>{data.unresolved.length > 0 && <details><summary>Unresolved references ({data.unresolved.length})</summary><div className="brain-connections">{data.unresolved.map((r, i) => <button key={i} onClick={() => { setDomain('all'); onSelect(r.source) }}><strong>{r.raw}</strong><small>{r.reason}</small><small>{r.source}</small></button>)}</div></details>}{data.warnings.length > 0 && <details open><summary>Read warnings ({data.warnings.length})</summary>{data.warnings.map(w => <p key={w}>{w}</p>)}</details>}<details><summary>Version history</summary>{BRAIN_RELEASES.map(r => <p key={r.version}><strong>v{r.version} · {r.date}</strong><br />{r.change}</p>)}</details></aside>}
       <div className="brain-stage-footer"><span>Drag to orbit · scroll to zoom · right-drag to pan · click to explore</span><button aria-label="Graph information" onClick={() => { setInspect(v => !v); setSelected(null) }}><Info size={14} />{data ? (data.unresolved.length ? `${data.unresolved.length} unresolved` : 'All notes shown') : 'About this graph'}</button></div>
     </div>
