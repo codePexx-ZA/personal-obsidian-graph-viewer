@@ -1,4 +1,3 @@
-// Graph versions are independent of the dashboard package version.
 export const BRAIN_RELEASES = [{
   version: '0.1.6',
   date: '2026-11-05',
