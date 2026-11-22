@@ -12,7 +12,6 @@ const normal = value => path.posix.normalize(slash(value))
 const str = value => typeof value === 'string' ? value : ''
 const strings = value => Array.isArray(value) ? value.filter(v => typeof v === 'string') : typeof value === 'string' ? [value] : []
 
-// Only regular files inside the fixed AI root are indexed. No symlink traversal.
 async function collect(root) {
   const files = [], manifests = [], warnings = []
   const realRoot = await fs.realpath(root)
@@ -25,7 +24,6 @@ async function collect(root) {
       if (!entry.isFile() || (!/\.md$/i.test(entry.name) && entry.name !== '_manifest.csv')) continue
       const relative = slash(path.relative(realRoot, full))
       try {
-        // Recheck containment after discovery, including paths changed during a refresh.
         const real = await fs.realpath(full)
         const rel = path.relative(realRoot, real)
         if (rel.startsWith('..' + path.sep) || rel === '..' || path.isAbsolute(rel)) continue
@@ -90,41 +88,49 @@ async function buildGraph(files, manifests = [], warnings = []) {
   const byPath = new Map(), byOriginal = new Map(), byName = new Map()
   const addIndex = (map, name, id) => { const k = key(name); map.set(k, [...new Set([...(map.get(k) || []), id])]) }
   notes.forEach(n => { addIndex(byPath, n.id, n.id); addIndex(byName, path.posix.basename(n.path, path.posix.extname(n.path)), n.id); n.aliases.forEach(a => addIndex(byName, a, n.id)) })
-  const originals = new Map(), originalPaths = []
+  const originals = new Map()
+  const suffixIndex = new Map()
+  function indexSuffix(id, value, manifest) {
+    const parts = value.toLowerCase().split('/').filter(Boolean)
+    if (parts.length < 2) return
+    const suffix = parts.slice(-2).join('/')
+    const candidate = { id, parts, manifest }
+    const bucket = suffixIndex.get(suffix)
+    if (bucket) bucket.push(candidate)
+    else suffixIndex.set(suffix, [candidate])
+  }
+  for (const note of notes) indexSuffix(note.id, note.id, false)
   manifestEntries.forEach(e => {
     if (byPath.has(key(e.path)) && e.original) {
       const orig = normal(e.original)
-      addIndex(byOriginal, orig, e.path); originals.set(e.path, orig); originalPaths.push({ id: e.path, path: orig })
+      addIndex(byOriginal, orig, e.path); originals.set(e.path, orig); indexSuffix(e.path, orig, true)
       addIndex(byName, path.posix.basename(orig, path.posix.extname(orig)), e.path)
     }
   })
   const byId = new Map(notes.map(n => [n.id, n]))
-  // A renamed note still matches when the written path shares a unique directory + filename with its current path or its manifest original.
   function suffixTarget(raw) {
-    const rawParts = raw.split('/').filter(Boolean)
+    const rawParts = raw.toLowerCase().split('/').filter(Boolean)
     if (rawParts.length < 2) return null
+    const bucket = suffixIndex.get(rawParts.slice(-2).join('/'))
+    if (!bucket) return null
+
     const hits = new Map()
-    const consider = (id, parts, manifest) => {
-      let n = 0
+    for (const { id, parts, manifest } of bucket) {
+      let length = 2
       const limit = Math.min(rawParts.length, parts.length)
-      while (n < limit && rawParts[rawParts.length - 1 - n].toLowerCase() === parts[parts.length - 1 - n].toLowerCase()) n++
-      if (n < 2) return
-      const prev = hits.get(id)
-      if (!prev || n > prev.n) hits.set(id, { n, manifest })
-      else if (n === prev.n && manifest) prev.manifest = true
+      while (length < limit && rawParts.at(-1 - length) === parts.at(-1 - length)) length++
+      const previous = hits.get(id)
+      if (!previous || length > previous.n) {
+        hits.set(id, { n: length, current: manifest ? previous?.current ?? 0 : length })
+      }
     }
-    for (const note of notes) consider(note.id, note.id.split('/').filter(Boolean), false)
-    for (const item of originalPaths) consider(item.id, item.path.split('/').filter(Boolean), true)
     const ranked = [...hits.entries()]
     if (!ranked.length) return null
     const best = Math.max(...ranked.map(([, hit]) => hit.n))
     const top = ranked.filter(([, hit]) => hit.n === best)
     if (top.length > 1) return { reason: 'Ambiguous path', candidates: top.map(([id]) => id) }
     const [id, hit] = top[0]
-    const onCurrent = byId.get(id).id.split('/').filter(Boolean)
-    let current = 0
-    while (current < Math.min(rawParts.length, onCurrent.length) && rawParts[rawParts.length - 1 - current].toLowerCase() === onCurrent[onCurrent.length - 1 - current].toLowerCase()) current++
-    return { target: id, provenance: current >= best ? 'path' : hit.manifest ? 'manifest' : 'path' }
+    return { target: id, provenance: hit.current >= best ? 'path' : 'manifest' }
   }
   function resolve(ref) {
     const source = byId.get(ref.source)
@@ -134,7 +140,6 @@ async function buildGraph(files, manifests = [], warnings = []) {
     if (!raw) return { target: source.id }
     if (/^(?:https?:|mailto:|data:|javascript:)/i.test(raw)) return { ignore: true }
     if (!/\.md$/i.test(raw)) { if (ref.kind !== 'wiki') return { ignore: true }; raw += '.md' }
-    // Resolve exact paths before unique short names. Never choose the last duplicate README.
     const candidates = []
     const absolute = /^(?:[a-z]:\/|\/|~\/)/i.test(raw)
     if (!absolute) {
@@ -179,7 +184,6 @@ async function buildGraph(files, manifests = [], warnings = []) {
     if (result.target) links.push({ source: ref.source, target: result.target, kind: ref.kind, evidence: ref.raw, provenance: result.provenance || 'path' })
     else unresolved.push({ ...ref, reason: result.reason, candidates: result.candidates || [] })
   }
-  // A path that matches no file still gets a node, so the graph shows the mention. Ambiguous names already have their files on the graph, so they are not counted again.
   const mentioned = new Map(), open = []
   for (const ref of unresolved) {
     if (ref.reason.startsWith('Ambiguous')) continue
